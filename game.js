@@ -3,6 +3,12 @@
   const ctx = canvas.getContext('2d');
   const hint = document.getElementById('hint');
 
+  // Audio is optional: if audio.js is missing or blocked, the game still runs.
+  const snd = (typeof Sfx !== 'undefined') ? Sfx : {
+    init(){}, ping(){}, echo(){}, startDrone(){}, stopDrone(){}, setTightness(){},
+    setHunters(){}, silenceHunters(){}, death(){}, setMuted(){}, isMuted(){ return true; }
+  };
+
   // The world is 640 virtual units TALL on every device — reaction time depends
   // on how far ahead you can see, so that number must never vary. Width instead
   // follows the real aspect ratio, and the cave is centred on world x = 0, so a
@@ -56,6 +62,8 @@
   let state, sub, pings, walls, hunters, motes, depth, best, noise, deadT, flash, shake, topY;
   let score, mult, silent, lastDepth, multBreak, impact;
   let camLead = 0;
+  let audioTick = 0;
+  const MUTE_BTN = { x: 16, y: VH - 44, w: 26, h: 22 };
 
   best = +(localStorage.getItem('fathom.best') || 0);
 
@@ -120,8 +128,38 @@
     hint.classList.remove('hidden');
   }
 
+  // How far the corridor is from (ox,oy) along a direction, capped at ping range.
+  function rayDist(ox, oy, dx, dy) {
+    const step = 10;
+    for (let d = step; d <= PING_MAX; d += step) {
+      const px = ox + dx * d, py = oy + dy * d;
+      const row = rowAt(py);
+      if (Math.abs(px - row.cx) > row.hw) return d;
+      if (row.spike) {
+        const x0 = Math.min(row.spike.x, row.spike.x + row.spike.w);
+        const x1 = Math.max(row.spike.x, row.spike.x + row.spike.w);
+        if (px > x0 && px < x1) return d;
+      }
+    }
+    return PING_MAX;
+  }
+
+  // Fire the returns for one ping. Each arrives when the wavefront actually
+  // reaches what it bounced off, so the delay you hear IS the distance.
+  const ECHO_RAYS = [[0, 1], [-0.5, 0.87], [0.5, 0.87], [-1, 0], [1, 0]];
+  function sendEchoes(x, y) {
+    for (const [dx, dy] of ECHO_RAYS) {
+      const d = rayDist(x, y, dx, dy);
+      if (d >= PING_MAX) continue;
+      const travel = lobeDist(dx * d, dy * d) / PING_SPEED;
+      snd.echo(travel, dx * 0.8, 1 - d / PING_MAX);
+    }
+  }
+
   function ping(x, y) {
     pings.push({ x, y, t: 0, pr: 0 });
+    snd.ping();
+    if (state === STATE.PLAYING) sendEchoes(x, y);
     noise = Math.min(1, noise + NOISE_PER_PING);
     // Seeing costs three things: light, noise, and everything you'd banked.
     if (state === STATE.PLAYING && mult > 1.05) multBreak = 1;
@@ -137,6 +175,15 @@
   }
 
   function tap(px, py) {
+    snd.init();   // audio can only start inside a user gesture
+    // The mute control is a HUD target, so it must not also fly the sub.
+    const sx = (px - offX) / scale, sy = (py - offY) / scale;
+    if (sx >= MUTE_BTN.x - 6 && sx <= MUTE_BTN.x + MUTE_BTN.w + 6 &&
+        sy >= MUTE_BTN.y - 6 && sy <= MUTE_BTN.y + MUTE_BTN.h + 6) {
+      snd.setMuted(!snd.isMuted());
+      if (snd.isMuted()) snd.silenceHunters();
+      return;
+    }
     // Screen point -> virtual world point.
     const vx = (px - offX) / scale - VW / 2;
     const vy = (py - offY) / scale + (sub.y - CAM_Y + camLead);
@@ -144,6 +191,7 @@
     if (state === STATE.READY) {
       state = STATE.PLAYING;
       hint.classList.add('hidden');
+      snd.startDrone();
     } else if (state === STATE.DEAD) {
       if (deadT > 0.7) reset();
       return;
@@ -175,6 +223,8 @@
     hint.textContent = 'tap to dive again';
     hint.classList.remove('hidden');
     if (score > best) { best = Math.floor(score); localStorage.setItem('fathom.best', best); }
+    snd.death(reason === 'hunter');
+    snd.stopDrone();
     if (navigator.vibrate) navigator.vibrate(reason === 'hunter' ? [30, 40, 60] : 45);
   }
 
@@ -249,6 +299,18 @@
     updateHunters(dt);
     for (const h of hunters) {
       if (Math.hypot(h.x - sub.x, h.y - sub.y) < SUB_R + 9) { die('hunter'); return; }
+    }
+
+    // Feed the mixer: walls closing in, and whatever is circling out there.
+    if (++audioTick % 3 === 0) {
+      snd.setTightness(Math.max(0, Math.min(1, (132 - rowAt(sub.y).hw) / 80)));
+      const near = hunters
+        .map(h => ({ d: Math.hypot(h.x - sub.x, h.y - sub.y), h }))
+        .filter(o => o.d < 320)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 2)
+        .map(o => ({ near: 1 - o.d / 320, pan: (o.h.x - sub.x) / 180, alert: o.h.alert }));
+      snd.setHunters(near);
     }
 
     for (let i = hunters.length - 1; i >= 0; i--) {
@@ -508,7 +570,41 @@
     ctx.restore();
   }
 
+  function drawMute() {
+    const b = MUTE_BTN, m = snd.isMuted();
+    ctx.save();
+    ctx.strokeStyle = m ? 'rgba(150,190,190,.45)' : 'rgba(140,235,225,.7)';
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = 1.6;
+    // Speaker cone
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y + 7);
+    ctx.lineTo(b.x + 5, b.y + 7);
+    ctx.lineTo(b.x + 11, b.y + 1);
+    ctx.lineTo(b.x + 11, b.y + 21);
+    ctx.lineTo(b.x + 5, b.y + 15);
+    ctx.lineTo(b.x, b.y + 15);
+    ctx.closePath();
+    ctx.fill();
+    if (m) {
+      ctx.beginPath();
+      ctx.moveTo(b.x + 15, b.y + 6);
+      ctx.lineTo(b.x + 24, b.y + 16);
+      ctx.moveTo(b.x + 24, b.y + 6);
+      ctx.lineTo(b.x + 15, b.y + 16);
+      ctx.stroke();
+    } else {
+      for (let i = 1; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.arc(b.x + 12, b.y + 11, 4 + i * 4, -0.9, 0.9);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   function drawHUD() {
+    drawMute();
     ctx.textAlign = 'center';
     if (state === STATE.READY) {
       ctx.fillStyle = 'rgba(190,255,245,.95)';

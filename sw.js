@@ -1,6 +1,6 @@
-const CACHE = 'fathom-v4';
+const CACHE = 'fathom-v5';
 const ASSETS = [
-  './', './index.html', './style.css', './game.js', './manifest.json',
+  './', './index.html', './style.css', './audio.js', './game.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png'
 ];
 
