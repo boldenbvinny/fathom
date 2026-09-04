@@ -130,6 +130,40 @@ const Sfx = (() => {
     for (const v of hunterVoices) v.g.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
   }
 
+  // Launch: a soft muted thunk, deliberately quiet — it must not give you away.
+  function decoyLaunch() {
+    if (!ctx || muted) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(320, t);
+    o.frequency.exponentialRampToValueAtTime(150, t + 0.1);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.07, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + 0.15);
+  }
+
+  // Detonation: loud and broad. This is the sound you want them to run toward.
+  function decoyBurst() {
+    if (!ctx || muted) return;
+    const t = ctx.currentTime;
+    const len = Math.floor(ctx.sampleRate * 0.35);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = buf;
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(1200, t);
+    f.frequency.exponentialRampToValueAtTime(420, t + 0.3);
+    g.gain.setValueAtTime(0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(t);
+  }
+
   function death(byHunter) {
     if (!ctx || muted) return;
     const t = ctx.currentTime;
@@ -152,5 +186,5 @@ const Sfx = (() => {
     silenceHunters();
   }
 
-  return { init, ping, echo, startDrone, stopDrone, setTightness, setHunters, silenceHunters, death, setMuted, isMuted };
+  return { init, ping, echo, decoyLaunch, decoyBurst, startDrone, stopDrone, setTightness, setHunters, silenceHunters, death, setMuted, isMuted };
 })();

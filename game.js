@@ -5,7 +5,8 @@
 
   // Audio is optional: if audio.js is missing or blocked, the game still runs.
   const snd = (typeof Sfx !== 'undefined') ? Sfx : {
-    init(){}, ping(){}, echo(){}, startDrone(){}, stopDrone(){}, setTightness(){},
+    init(){}, ping(){}, echo(){}, decoyLaunch(){}, decoyBurst(){},
+    startDrone(){}, stopDrone(){}, setTightness(){},
     setHunters(){}, silenceHunters(){}, death(){}, setMuted(){}, isMuted(){ return true; }
   };
 
@@ -55,6 +56,11 @@
   const NOISE_DECAY = 0.22;
   const SILENT_RAMP = 1.7;    // seconds of silence per +1.0 of multiplier
   const MULT_MAX = 3;
+  const DECOY_HOLD = 0.3;     // hold this long past a tap to launch one
+  const DECOY_SPEED = 300;
+  const DECOY_MAX = 3;
+  const DECOY_REFILL = 500;   // metres of depth per replenished decoy
+  const DECOY_NOISE = 0.45;   // detonates far louder than a ping — that's the point
   const DEATH_R = 132;        // how much of the cave the post-mortem reveals
   const CAM_Y = VH * 0.33;    // sub sits above centre; you see more of what's below
 
@@ -62,6 +68,7 @@
   let state, sub, pings, walls, hunters, motes, depth, best, noise, deadT, flash, shake, topY;
   let score, mult, silent, lastDepth, multBreak, impact;
   let camLead = 0;
+  let decoys, decoysLeft, decoyRefillAt, holding;
   let audioTick = 0;
   const MUTE_BTN = { x: 16, y: VH - 44, w: 26, h: 22 };
 
@@ -118,6 +125,7 @@
     depth = 0; noise = 0; deadT = 0; flash = 0; shake = 0;
     score = 0; mult = 1; silent = 0; lastDepth = 0; multBreak = 0; camLead = 0;
     impact = null;
+    decoys = []; decoysLeft = DECOY_MAX; decoyRefillAt = DECOY_REFILL; holding = null;
     genY = -VH; wander = 0; wanderV = 0;
     while (genY < VH * 1.6) genRow();
     topY = walls[0].y;
@@ -205,7 +213,19 @@
     if (navigator.vibrate) navigator.vibrate(8);
   }
 
-  window.addEventListener('pointerdown', e => { e.preventDefault(); tap(e.clientX, e.clientY); }, { passive: false });
+  // The tap still fires instantly on pointerdown — no latency is added to the
+  // core control. Keeping the finger down afterwards is what launches a decoy.
+  window.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    tap(e.clientX, e.clientY);
+    if (state === STATE.PLAYING) holding = { px: e.clientX, py: e.clientY, t: 0 };
+  }, { passive: false });
+  window.addEventListener('pointermove', e => {
+    if (holding) { holding.px = e.clientX; holding.py = e.clientY; }
+  }, { passive: false });
+  const release = () => { holding = null; };
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
   window.addEventListener('touchstart', e => {
     e.preventDefault();
     const t = e.changedTouches[0];
@@ -214,6 +234,58 @@
   window.addEventListener('keydown', e => {
     if (e.code === 'Space') { e.preventDefault(); tap(window.innerWidth / 2, window.innerHeight * 0.2); }
   });
+
+  function launchDecoy(wx, wy) {
+    const dx = wx - sub.x, dy = wy - sub.y;
+    const len = Math.hypot(dx, dy) || 1;
+    decoys.push({
+      x: sub.x, y: sub.y,
+      vx: (dx / len) * DECOY_SPEED, vy: (dy / len) * DECOY_SPEED,
+      t: 0, life: Math.min(1.4, len / DECOY_SPEED), ph: 0
+    });
+    decoysLeft--;
+    snd.decoyLaunch();
+    if (navigator.vibrate) navigator.vibrate([6, 30, 6]);
+  }
+
+  function detonate(d) {
+    // A decoy is a ping you are not standing next to: it lights the cave down
+    // there, and every hunter in earshot commits to the wrong place.
+    pings.push({ x: d.x, y: d.y, t: 0, pr: 0 });
+    noise = Math.min(1, noise + DECOY_NOISE);
+    for (const h of hunters) {
+      if (Math.hypot(h.x - d.x, h.y - d.y) < 420) {
+        h.tx = d.x; h.ty = d.y; h.alert = 1;
+      }
+    }
+    snd.decoyBurst();
+    snd.ping();
+  }
+
+  function updateDecoys(dt) {
+    if (holding) {
+      holding.t += dt;
+      if (holding.t >= DECOY_HOLD && decoysLeft > 0) {
+        const vx = (holding.px - offX) / scale - VW / 2;
+        const vy = (holding.py - offY) / scale + (sub.y - CAM_Y + camLead);
+        launchDecoy(vx, vy);
+        holding = null;
+      }
+    }
+    for (let i = decoys.length - 1; i >= 0; i--) {
+      const d = decoys[i];
+      d.t += dt; d.ph += dt * 9;
+      d.x += d.vx * dt; d.y += d.vy * dt;
+      let hit = d.t >= d.life;
+      const row = rowAt(d.y);
+      if (Math.abs(d.x - row.cx) > row.hw) hit = true;   // detonates on contact
+      if (hit) { detonate(d); decoys.splice(i, 1); }
+    }
+    if (depth >= decoyRefillAt) {
+      decoyRefillAt += DECOY_REFILL;
+      decoysLeft = Math.min(DECOY_MAX, decoysLeft + 1);
+    }
+  }
 
   function die(reason) {
     if (state !== STATE.PLAYING) return;
@@ -251,6 +323,7 @@
       return;
     }
     if (state === STATE.DEAD) {
+      holding = null;
       deadT += dt;
       flash = Math.max(0, flash - dt * 3);
       shake = Math.max(0, shake - dt * 3);
@@ -296,6 +369,7 @@
       if (sub.x + SUB_R > x0 && sub.x - SUB_R < x1) { die('wall'); return; }
     }
 
+    updateDecoys(dt);
     updateHunters(dt);
     for (const h of hunters) {
       if (Math.hypot(h.x - sub.x, h.y - sub.y) < SUB_R + 9) { die('hunter'); return; }
@@ -389,6 +463,7 @@
     drawWalls();
     drawPings();
     drawHunters();
+    drawDecoys();
     drawImpact();
     drawSub();
 
@@ -510,6 +585,33 @@
     }
   }
 
+  function drawDecoys() {
+    for (const d of decoys) {
+      const pulse = 0.6 + Math.sin(d.ph) * 0.4;
+      ctx.fillStyle = `rgba(255,215,140,${0.55 + pulse * 0.35})`;
+      ctx.shadowColor = 'rgba(255,190,90,.9)';
+      ctx.shadowBlur = 12 * pulse;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 4, 0, 6.283);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,205,130,${0.25 * pulse})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 6 + pulse * 5, 0, 6.283);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+    // Charge ring: shows the decoy is coming before it commits.
+    if (holding && decoysLeft > 0 && holding.t > 0.06) {
+      const f = Math.min(1, holding.t / DECOY_HOLD);
+      ctx.strokeStyle = `rgba(255,205,130,${0.3 + f * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sub.x, sub.y, SUB_R + 14, -1.571, -1.571 + 6.283 * f);
+      ctx.stroke();
+    }
+  }
+
   function drawImpact() {
     if (!impact) return;
     const hold = deadT < 1.4 ? 1 : Math.max(0, 1 - (deadT - 1.4) * 0.7);
@@ -618,9 +720,11 @@
       ctx.fillText('and tells them where you are', VW / 2, 206);
       ctx.fillStyle = 'rgba(150,255,200,.7)';
       ctx.fillText('dive blind \u2014 silence pays up to \u00d73', VW / 2, 232);
+      ctx.fillStyle = 'rgba(255,205,130,.7)';
+      ctx.fillText('hold to throw a decoy \u2014 let them chase it', VW / 2, 252);
       if (best > 0) {
         ctx.fillStyle = 'rgba(120,190,190,.55)';
-        ctx.fillText('best  ' + best, VW / 2, 266);
+        ctx.fillText('best  ' + best, VW / 2, 286);
       }
       return;
     }
@@ -652,6 +756,21 @@
     ctx.fillStyle = danger ? 'rgba(255,140,155,.9)' : 'rgba(150,220,215,.6)';
     ctx.textAlign = 'right';
     ctx.fillText(danger ? 'THEY HEAR YOU' : 'NOISE', VW - 18, by - 7);
+
+    // Decoys remaining. Hold after a tap to throw one.
+    for (let i = 0; i < DECOY_MAX; i++) {
+      const cx = VW - 18 - i * 15, cy = by + 20;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4, 0, 6.283);
+      if (i < decoysLeft) {
+        ctx.fillStyle = 'rgba(255,205,130,.85)';
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = 'rgba(255,205,130,.28)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
 
     if (state === STATE.DEAD && deadT > 0.4) {
       const a = Math.min(1, (deadT - 0.4) * 2.5);
