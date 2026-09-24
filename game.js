@@ -69,6 +69,14 @@
   let score, mult, silent, lastDepth, multBreak, impact;
   let camLead = 0;
   let decoys, decoysLeft, decoyRefillAt, holding;
+  let paused = false;
+
+  // Honour the OS motion preference for shake and full-screen flashes.
+  const motionQuery = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+  let reduceMotion = !!(motionQuery && motionQuery.matches);
+  if (motionQuery && motionQuery.addEventListener) {
+    motionQuery.addEventListener('change', e => { reduceMotion = e.matches; });
+  }
   let audioTick = 0;
   const MUTE_BTN = { x: 16, y: VH - 44, w: 26, h: 22 };
 
@@ -192,18 +200,25 @@
       if (snd.isMuted()) snd.silenceHunters();
       return;
     }
-    // Screen point -> virtual world point.
-    const vx = (px - offX) / scale - VW / 2;
-    const vy = (py - offY) / scale + (sub.y - CAM_Y + camLead);
+    if (paused) { setPaused(false); holding = null; return; }
 
+    if (state === STATE.DEAD) {
+      // "Tap to dive again" means dive, not "go back to the title screen".
+      if (deadT <= 0.7) return;
+      reset();
+    } else if (state !== STATE.READY && state !== STATE.PLAYING) {
+      return;
+    }
     if (state === STATE.READY) {
       state = STATE.PLAYING;
       hint.classList.add('hidden');
       snd.startDrone();
-    } else if (state === STATE.DEAD) {
-      if (deadT > 0.7) reset();
-      return;
     }
+
+    // Screen point -> virtual world point. Mapped after any reset, so the
+    // coordinates belong to the sub that is about to be flown.
+    const vx = (px - offX) / scale - VW / 2;
+    const vy = (py - offY) / scale + (sub.y - CAM_Y + camLead);
     // Thrust toward the finger, and ping from the hull.
     const dx = vx - sub.x, dy = vy - sub.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -287,10 +302,31 @@
     }
   }
 
+  function setPaused(p) {
+    if (p === paused) return;
+    paused = p;
+    if (p) {
+      snd.silenceHunters();
+      snd.stopDrone();
+      hint.textContent = 'tap to resume';
+      hint.classList.remove('hidden');
+    } else if (state === STATE.PLAYING) {
+      snd.startDrone();
+      hint.classList.add('hidden');
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && state === STATE.PLAYING) setPaused(true);
+  });
+  window.addEventListener('blur', () => { if (state === STATE.PLAYING) setPaused(true); });
+
   function die(reason) {
     if (state !== STATE.PLAYING) return;
     state = STATE.DEAD;
-    deadT = 0; flash = 1; shake = 1;
+    deadT = 0;
+    flash = reduceMotion ? 0.3 : 1;
+    shake = reduceMotion ? 0 : 1;
     impact = { x: sub.x, y: sub.y, hunter: reason === 'hunter' };
     hint.textContent = 'tap to dive again';
     hint.classList.remove('hidden');
@@ -474,6 +510,16 @@
       ctx.fillStyle = `rgba(255,90,80,${flash * 0.5})`;
       ctx.fillRect(0, 0, VW, VH);
     }
+    if (paused) {
+      ctx.fillStyle = 'rgba(3,7,13,.72)';
+      ctx.fillRect(0, 0, VW, VH);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(190,255,245,.9)';
+      ctx.font = '300 22px system-ui, sans-serif';
+      ctx.letterSpacing = '6px';
+      ctx.fillText('PAUSED', VW / 2, VH / 2);
+      ctx.letterSpacing = '0px';
+    }
     if (offX > 6) {
       ctx.strokeStyle = 'rgba(90,190,190,.16)';
       ctx.lineWidth = 1;
@@ -563,14 +609,14 @@
       const amb = Math.max(0, 1 - Math.hypot(h.x - sub.x, h.y - sub.y) / 70) * 0.3;
       const v = Math.max(h.lit, amb);
       if (v < 0.02) continue;
-      ctx.fillStyle = `rgba(255,120,140,${v})`;
-      ctx.shadowColor = 'rgba(255,70,100,.9)';
+      ctx.fillStyle = `rgba(232,74,108,${v})`;
+      ctx.shadowColor = 'rgba(214,40,80,.9)';
       ctx.shadowBlur = 14 * v;
       ctx.beginPath();
       ctx.arc(h.x, h.y, 7, 0, 6.283);
       ctx.fill();
       // Trailing tendrils, so a hunter never reads as a harmless dot.
-      ctx.strokeStyle = `rgba(255,120,140,${v * 0.7})`;
+      ctx.strokeStyle = `rgba(232,74,108,${v * 0.7})`;
       ctx.lineWidth = 1.5;
       for (let i = 0; i < 4; i++) {
         const ang = h.ph + i * 1.57;
@@ -588,18 +634,25 @@
   function drawDecoys() {
     for (const d of decoys) {
       const pulse = 0.6 + Math.sin(d.ph) * 0.4;
-      ctx.fillStyle = `rgba(255,215,140,${0.55 + pulse * 0.35})`;
-      ctx.shadowColor = 'rgba(255,190,90,.9)';
-      ctx.shadowBlur = 12 * pulse;
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.ph * 0.4);
+      // A hard diamond: unmistakably manufactured, and unmistakably not a hunter
+      // even when hue is unavailable to the viewer.
+      ctx.fillStyle = `rgba(255,246,214,${0.7 + pulse * 0.3})`;
+      ctx.shadowColor = 'rgba(255,235,170,.95)';
+      ctx.shadowBlur = 14 * pulse;
       ctx.beginPath();
-      ctx.arc(d.x, d.y, 4, 0, 6.283);
+      ctx.moveTo(0, -6); ctx.lineTo(6, 0); ctx.lineTo(0, 6); ctx.lineTo(-6, 0);
+      ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = `rgba(255,205,130,${0.25 * pulse})`;
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(255,240,200,${0.3 * pulse})`;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(d.x, d.y, 6 + pulse * 5, 0, 6.283);
+      ctx.rect(-8 - pulse * 4, -8 - pulse * 4, 16 + pulse * 8, 16 + pulse * 8);
       ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.restore();
     }
     // Charge ring: shows the decoy is coming before it commits.
     if (holding && decoysLeft > 0 && holding.t > 0.06) {
@@ -799,7 +852,7 @@
   function loop(now) {
     const dt = Math.min((now - last) / 1000, 1 / 30);
     last = now;
-    update(dt);
+    if (!paused) update(dt);
     draw();
     requestAnimationFrame(loop);
   }
