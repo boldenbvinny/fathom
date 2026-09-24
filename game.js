@@ -201,18 +201,24 @@
       return;
     }
     if (paused) { setPaused(false); holding = null; return; }
-    // Screen point -> virtual world point.
-    const vx = (px - offX) / scale - VW / 2;
-    const vy = (py - offY) / scale + (sub.y - CAM_Y + camLead);
 
+    if (state === STATE.DEAD) {
+      // "Tap to dive again" means dive, not "go back to the title screen".
+      if (deadT <= 0.7) return;
+      reset();
+    } else if (state !== STATE.READY && state !== STATE.PLAYING) {
+      return;
+    }
     if (state === STATE.READY) {
       state = STATE.PLAYING;
       hint.classList.add('hidden');
       snd.startDrone();
-    } else if (state === STATE.DEAD) {
-      if (deadT > 0.7) reset();
-      return;
     }
+
+    // Screen point -> virtual world point. Mapped after any reset, so the
+    // coordinates belong to the sub that is about to be flown.
+    const vx = (px - offX) / scale - VW / 2;
+    const vy = (py - offY) / scale + (sub.y - CAM_Y + camLead);
     // Thrust toward the finger, and ping from the hull.
     const dx = vx - sub.x, dy = vy - sub.y;
     const len = Math.hypot(dx, dy) || 1;

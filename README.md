@@ -63,3 +63,18 @@ guessed:
 2. **The virtual world is 640 units tall on every device.** Warning time is
    proportional to how far ahead you can see, so viewport height is locked and
    only width flexes with the aspect ratio. Scaling is *contain*, never cover.
+
+## Tests
+
+```sh
+node test/run.js
+```
+
+No dependencies. `test/harness.js` provides one shared browser stub — a single
+place to add a browser API when the game starts using one, which is what keeps
+the suite from drifting out of sync with the game.
+
+The suite guards the two load-bearing invariants (reaction window and fixed
+world height) across phone, tablet and desktop viewports, plus the silence
+multiplier actually paying, decoy mechanics, pause, reduced motion, audio
+scheduling, and that the game still runs with `audio.js` absent.
