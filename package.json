@@ -1,0 +1,13 @@
+{
+  "name": "fathom",
+  "version": "1.0.0",
+  "description": "A one-tap sonar diving game. Dive blind. Ping to see. They are listening.",
+  "private": true,
+  "homepage": "https://boldenbvinny.github.io/fathom/",
+  "repository": { "type": "git", "url": "https://github.com/boldenbvinny/fathom.git" },
+  "scripts": {
+    "test": "node test/run.js",
+    "check": "node --check game.js && node --check audio.js",
+    "start": "python3 -m http.server 8080"
+  }
+}

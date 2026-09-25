@@ -92,7 +92,7 @@ guessed:
 ## Tests
 
 ```sh
-node test/run.js
+node test/run.js      # or: npm test
 ```
 
 No dependencies. `test/harness.js` provides one shared browser stub — a single
