@@ -11,6 +11,10 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 
+// Captured before any test swaps the global in, so repeated install() calls
+// never subclass a subclass.
+const RealDate = Date;
+
 function makeCtx2D() {
   // Records nothing; the tests assert on game state, not on pixels.
   return new Proxy({}, {
@@ -31,13 +35,24 @@ function makeCtx2D() {
  *   opts.width / opts.height  viewport size
  *   opts.reduceMotion         what matchMedia reports
  *   opts.audio                AudioContext constructor, if the test wants sound
+ *   opts.date                 local wall-clock the game should see
  * Returns handles the test drives the game through.
  */
 function install(opts = {}) {
   const {
     width = 393, height = 852, dpr = 2,
-    reduceMotion = false, audio = null
+    reduceMotion = false, audio = null,
+    date = '2026-09-24T12:00:00'
   } = opts;
+
+  // The cave is generated from the local date, so an unpinned clock would make
+  // every terrain assertion in this suite expire at midnight. Pin it.
+  const fixed = RealDate.parse(date);
+  class FakeDate extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(fixed); }
+    static now() { return fixed; }
+  }
+  global.Date = FakeDate;
 
   const el = {
     getContext: () => makeCtx2D(),

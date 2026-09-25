@@ -20,6 +20,29 @@ That tension is the entire game.
 - **Noise attracts.** The meter rises with each ping. Above the line, drifting
   hunters stop drifting and start converging on where they heard you.
 
+## The daily dive
+
+By default every dive is **the day's dive**: the cave is generated from a seed
+derived from the date, so everyone who plays on the same day flies the same
+trench and the scores are worth comparing. The day is your *local* day — a
+puzzle that turns over at midnight where you are reads correctly; one that
+turns over at midnight UTC does not.
+
+The post-mortem offers the run as something you can paste:
+
+```
+Fathom · Day 1
+612 pts · 284m · 9 pings · 2 decoys · ×2.6 peak
+https://boldenbvinny.github.io/fathom/
+```
+
+`ENDLESS` on the title screen rerolls a fresh trench every dive instead. Bests
+are kept separately: endless under `fathom.best`, each day under its own key.
+
+Only world generation is seeded. Cosmetic jitter stays on `Math.random`, and
+physics still depends on frame timing, so the guarantee is *the same cave* —
+not a replay.
+
 ## Running it
 
 No build step, no dependencies — it's plain Canvas 2D.

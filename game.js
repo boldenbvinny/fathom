@@ -79,8 +79,97 @@
   }
   let audioTick = 0;
   const MUTE_BTN = { x: 16, y: VH - 44, w: 26, h: 22 };
+  // Centred under the post-mortem. VW moves with the viewport, so it is
+  // computed on demand rather than frozen at load.
+  function shareRect() {
+    const w = 176, h = 34;
+    return { x: VW / 2 - w / 2, y: VH / 2 + 110, w, h };
+  }
+  function modeRect(i) {
+    const w = 92, h = 30, gap = 10;
+    return { x: VW / 2 - w - gap / 2 + i * (w + gap), y: 312, w, h };
+  }
+  const hits = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
-  best = +(localStorage.getItem('fathom.best') || 0);
+  // --- the daily dive -----------------------------------------------------
+  // A shared score is only an argument worth having if everyone dived the
+  // same trench, so the cave is generated from a seed derived from the date
+  // rather than from Math.random. The day is the player's LOCAL day: a puzzle
+  // that flips at midnight where you are reads correctly; one that flips at
+  // midnight UTC does not.
+  const MODE = { DAILY: 'daily', ENDLESS: 'endless' };
+  const EPOCH = Date.UTC(2026, 8, 24);   // 2026-09-24 is Day 1
+  let mode = localStorage.getItem('fathom.mode') === MODE.ENDLESS
+    ? MODE.ENDLESS : MODE.DAILY;
+  let dayKey = '', dayNo = 0;
+
+  function localDayKey(d) {
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function dayNumber(key) {
+    const [y, m, d] = key.split('-').map(Number);
+    return Math.round((Date.UTC(y, m - 1, d) - EPOCH) / 86400000) + 1;
+  }
+
+  // FNV-1a, so the same date string always yields the same cave.
+  function hash32(str) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  // mulberry32. Everything that shapes the cave draws from here; cosmetic
+  // jitter (motes, shake) stays on Math.random, where divergence is invisible.
+  let rndState = 1;
+  function rnd() {
+    rndState = (rndState + 0x6D2B79F5) >>> 0;
+    let t = rndState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  function bestKey() {
+    return mode === MODE.DAILY ? 'fathom.daily.' + dayKey : 'fathom.best';
+  }
+  function loadBest() { best = +(localStorage.getItem(bestKey()) || 0); }
+  function setMode(m) {
+    mode = m;
+    localStorage.setItem('fathom.mode', m);
+    reset();
+  }
+
+  // --- run stats ----------------------------------------------------------
+  // What the share string is made of: how much you saw, and what it cost.
+  let pingCount, decoyCount, peakMult;
+  let shareFlash = 0;   // brief "copied" confirmation
+
+  const SHARE_URL = (typeof location !== 'undefined' && /^https?:/.test(location.protocol))
+    ? location.origin + location.pathname.replace(/index\.html$/, '')
+    : 'https://boldenbvinny.github.io/fathom/';
+
+  function shareLines() {
+    const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    const head = mode === MODE.DAILY ? 'Fathom \u00b7 Day ' + dayNo : 'Fathom \u00b7 endless';
+    const bits = [Math.floor(score) + ' pts', Math.floor(depth) + 'm', plural(pingCount, 'ping')];
+    if (decoyCount > 0) bits.push(plural(decoyCount, 'decoy'));
+    bits.push('\u00d7' + peakMult.toFixed(1) + ' peak');
+    return head + '\n' + bits.join(' \u00b7 ') + '\n' + SHARE_URL;
+  }
+
+  function shareRun() {
+    const text = shareLines();
+    // navigator.share is the good path on a phone; the clipboard is the
+    // fallback everywhere else. Both can reject, and neither is worth a throw.
+    if (navigator.share) { navigator.share({ text }).catch(() => {}); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => { shareFlash = 1.6; }).catch(() => {});
+    }
+  }
 
   // --- cave ---------------------------------------------------------------
   // The cave is a column of sample rows. Each row is one slice of tunnel:
@@ -94,7 +183,7 @@
 
   function genRow() {
     const d = genY;
-    wanderV += (Math.random() - 0.5) * 26;
+    wanderV += (rnd() - 0.5) * 26;
     wanderV *= 0.92;
     wander += wanderV * 0.06;
     const hw = halfWidthAt(d);
@@ -106,14 +195,14 @@
     const row = { y: genY, cx, hw, lL: 0, lR: 0 };
 
     // Occasional pillar splitting the channel — only once it's worth the scare.
-    if (d > 1400 && Math.random() < 0.010) {
-      const side = Math.random() < 0.5 ? -1 : 1;
-      row.spike = { x: cx + side * hw, w: hw * (0.35 + Math.random() * 0.3) * -side, l: 0 };
+    if (d > 1400 && rnd() < 0.010) {
+      const side = rnd() < 0.5 ? -1 : 1;
+      row.spike = { x: cx + side * hw, w: hw * (0.35 + rnd() * 0.3) * -side, l: 0 };
     }
     walls.push(row);
     genY += SAMPLE;
 
-    if (d > 900 && Math.random() < 0.0075) spawnHunter(cx, genY + VH * 0.5);
+    if (d > 900 && rnd() < 0.0075) spawnHunter(cx, genY + VH * 0.5);
   }
 
   function rowAt(y) {
@@ -122,11 +211,21 @@
   }
 
   function spawnHunter(x, y) {
-    hunters.push({ x, y, vx: 0, vy: 0, tx: x, ty: y, lit: 0, alert: 0, ph: Math.random() * 6.28 });
+    hunters.push({ x, y, vx: 0, vy: 0, tx: x, ty: y, lit: 0, alert: 0, ph: rnd() * 6.28 });
   }
 
   // --- lifecycle ----------------------------------------------------------
   function reset() {
+    // Read the clock every dive: a session left open past midnight should
+    // roll onto the new day's cave rather than keep serving yesterday's.
+    dayKey = localDayKey(new Date());
+    dayNo = dayNumber(dayKey);
+    loadBest();
+    rndState = mode === MODE.DAILY
+      ? hash32('fathom-' + dayKey)
+      : (Math.random() * 4294967296) >>> 0;
+    pingCount = 0; decoyCount = 0; peakMult = 1; shareFlash = 0;
+
     state = STATE.READY;
     sub = { x: 0, y: 0, vx: 0, vy: 0, a: 0 };
     pings = []; walls = []; hunters = []; motes = [];
@@ -177,6 +276,7 @@
     snd.ping();
     if (state === STATE.PLAYING) sendEchoes(x, y);
     noise = Math.min(1, noise + NOISE_PER_PING);
+    if (state === STATE.PLAYING) pingCount++;
     // Seeing costs three things: light, noise, and everything you'd banked.
     if (state === STATE.PLAYING && mult > 1.05) multBreak = 1;
     silent = 0;
@@ -201,6 +301,21 @@
       return;
     }
     if (paused) { setPaused(false); holding = null; return; }
+
+    // Both new controls sit on screens where a tap would otherwise dive.
+    if (state === STATE.DEAD && deadT > 0.7 && hits(shareRect(), sx, sy)) {
+      shareRun();
+      return;
+    }
+    if (state === STATE.READY) {
+      for (let i = 0; i < 2; i++) {
+        if (hits(modeRect(i), sx, sy)) {
+          const want = i === 0 ? MODE.DAILY : MODE.ENDLESS;
+          if (want !== mode) setMode(want);
+          return;
+        }
+      }
+    }
 
     if (state === STATE.DEAD) {
       // "Tap to dive again" means dive, not "go back to the title screen".
@@ -259,6 +374,7 @@
       t: 0, life: Math.min(1.4, len / DECOY_SPEED), ph: 0
     });
     decoysLeft--;
+    decoyCount++;
     snd.decoyLaunch();
     if (navigator.vibrate) navigator.vibrate([6, 30, 6]);
   }
@@ -330,7 +446,7 @@
     impact = { x: sub.x, y: sub.y, hunter: reason === 'hunter' };
     hint.textContent = 'tap to dive again';
     hint.classList.remove('hidden');
-    if (score > best) { best = Math.floor(score); localStorage.setItem('fathom.best', best); }
+    if (score > best) { best = Math.floor(score); localStorage.setItem(bestKey(), best); }
     snd.death(reason === 'hunter');
     snd.stopDrone();
     if (navigator.vibrate) navigator.vibrate(reason === 'hunter' ? [30, 40, 60] : 45);
@@ -361,6 +477,7 @@
     if (state === STATE.DEAD) {
       holding = null;
       deadT += dt;
+      shareFlash = Math.max(0, shareFlash - dt);
       flash = Math.max(0, flash - dt * 3);
       shake = Math.max(0, shake - dt * 3);
       sub.vy += GRAVITY * dt * 0.4;
@@ -388,6 +505,7 @@
     // Distance covered blind is worth more than distance covered lit.
     silent += dt;
     mult = Math.min(MULT_MAX, 1 + silent / SILENT_RAMP);
+    if (mult > peakMult) peakMult = mult;
     score += Math.max(0, depth - lastDepth) * mult;
     lastDepth = depth;
     multBreak = Math.max(0, multBreak - dt * 2.5);
@@ -758,6 +876,23 @@
     ctx.restore();
   }
 
+  function drawPill(r, label, active) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, r.h / 2);
+    else ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = active ? 'rgba(120,255,235,.13)' : 'rgba(255,255,255,.035)';
+    ctx.fill();
+    ctx.strokeStyle = active ? 'rgba(120,255,235,.55)' : 'rgba(150,220,215,.22)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.letterSpacing = '2px';
+    ctx.fillStyle = active ? 'rgba(200,255,248,.95)' : 'rgba(150,220,215,.5)';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 4);
+    ctx.letterSpacing = '0px';
+  }
+
   function drawHUD() {
     drawMute();
     ctx.textAlign = 'center';
@@ -777,8 +912,16 @@
       ctx.fillText('hold to throw a decoy \u2014 let them chase it', VW / 2, 252);
       if (best > 0) {
         ctx.fillStyle = 'rgba(120,190,190,.55)';
-        ctx.fillText('best  ' + best, VW / 2, 286);
+        ctx.fillText((mode === MODE.DAILY ? "today's best  " : 'best  ') + best, VW / 2, 286);
       }
+      drawPill(modeRect(0), 'DAILY', mode === MODE.DAILY);
+      drawPill(modeRect(1), 'ENDLESS', mode === MODE.ENDLESS);
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(140,205,200,.6)';
+      ctx.textAlign = 'center';
+      ctx.fillText(mode === MODE.DAILY
+        ? 'day ' + dayNo + ' \u2014 everyone dives the same trench'
+        : 'a new trench every dive', VW / 2, 366);
       return;
     }
 
@@ -843,7 +986,22 @@
       ctx.fillStyle = impact && impact.hunter ? 'rgba(255,150,160,.75)' : 'rgba(255,190,140,.75)';
       ctx.fillText(impact && impact.hunter ? 'something found you' : 'you hit the wall here', VW / 2, VH / 2 + 66);
       ctx.fillStyle = 'rgba(150,220,215,.65)';
-      ctx.fillText(Math.floor(score) >= best ? 'NEW RECORD' : 'best  ' + best, VW / 2, VH / 2 + 92);
+      ctx.fillText(
+        Math.floor(score) >= best ? 'NEW RECORD'
+          : (mode === MODE.DAILY ? "today's best  " : 'best  ') + best,
+        VW / 2, VH / 2 + 92);
+
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(120,190,190,.5)';
+      ctx.letterSpacing = '2px';
+      ctx.fillText(mode === MODE.DAILY ? 'DAY ' + dayNo : 'ENDLESS', VW / 2, VH / 2 - 58);
+      ctx.letterSpacing = '0px';
+
+      if (deadT > 0.7) {
+        drawPill(shareRect(),
+          shareFlash > 0 ? 'COPIED' : (navigator.share ? 'SHARE RESULT' : 'COPY RESULT'),
+          shareFlash > 0);
+      }
       ctx.globalAlpha = 1;
     }
   }

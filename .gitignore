@@ -1,3 +1,7 @@
 .DS_Store
 node_modules/
 *.log
+
+# Promo captures, regenerated from a recording rather than versioned.
+fathom.gif
+fathom.mp4
