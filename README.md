@@ -41,6 +41,7 @@ works offline.
 | `game.js` | The whole game — physics, sonar, collision, rendering, states |
 | `index.html`, `style.css` | Full-bleed canvas, notch-safe, no zoom or scroll |
 | `manifest.json`, `sw.js` | PWA shell and offline cache |
+| `og.png` | 1200x630 social preview card, referenced by the `og:`/`twitter:` tags |
 | `icons/` | App icons, generated programmatically |
 
 ## Tuning
