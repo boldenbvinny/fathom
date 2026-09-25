@@ -103,3 +103,9 @@ The suite guards the two load-bearing invariants (reaction window and fixed
 world height) across phone, tablet and desktop viewports, plus the silence
 multiplier actually paying, decoy mechanics, pause, reduced motion, audio
 scheduling, and that the game still runs with `audio.js` absent.
+
+## Licence
+
+All rights reserved. The source is public to read, not to reuse — there is no
+licence granting copying, modification or redistribution. If you want to build
+on it, ask.
